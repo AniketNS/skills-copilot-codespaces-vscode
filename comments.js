@@ -1,38 +1,73 @@
-// create a web server
-// listen on port 3000
+// Create web server
 
 const express = require('express');
+const bodyParser = require('body-parser');
+const { randomBytes } = require('crypto');
+const cors = require('cors');
+const axios = require('axios');
+
+// Constants
 const app = express();
-const port = 3000;
+const port = 4001;
 
-// set view engine to ejs
-app.set('view engine', 'ejs');
+// Use middleware
+app.use(bodyParser.json());
+app.use(cors());
 
-// set public folder to serve static files
-app.use(express.static('public'));
+// Data
+const commentsByPostId = {};
 
-// use res.render to load up an ejs view file
+// Routes
+app.get('/posts/:id/comments', (req, res) => {
+  const { id } = req.params;
+  const comments = commentsByPostId[id] || [];
+  res.status(200).send(comments);
+});
 
-// index page
-app.get('/', (req, res) => {
-  let drinks = [
-    { name: 'Bloody Mary', drunkness: 3 },
-    { name: 'Martini', drunkness: 5 },
-    { name: 'Scotch', drunkness: 10 },
-  ];
-  let tagline =
-    "Any code of your own that you haven't looked at for six or more months might as well have been written by someone else.";
+app.post('/posts/:id/comments', async (req, res) => {
+  const { id } = req.params;
+  const { content } = req.body;
+  const commentId = randomBytes(4).toString('hex');
+  const comments = commentsByPostId[id] || [];
+  comments.push({ id: commentId, content, status: 'pending' });
+  commentsByPostId[id] = comments;
 
-  res.render('pages/index', {
-    drinks: drinks,
-    tagline: tagline,
+  // Send event to event bus
+  await axios.post('http://localhost:4005/events', {
+    type: 'CommentCreated',
+    data: {
+      id: commentId,
+      content,
+      postId: id,
+      status: 'pending',
+    },
   });
+
+  res.status(201).send(comments);
 });
 
-// about page
-app.get('/about', (req, res) => {
-  res.render('pages/about');
+app.post('/events', async (req, res) => {
+  console.log('Event Received:', req.body.type);
+  const { type, data } = req.body;
+  if (type === 'CommentModerated') {
+    const { id, postId, status, content } = data;
+    const comments = commentsByPostId[postId];
+    const comment = comments.find((comment) => comment.id === id);
+    comment.status = status;
+    await axios.post('http://localhost:4005/events', {
+      type: 'CommentUpdated',
+      data: {
+        id,
+        postId,
+        status,
+        content,
+      },
+    });
+  }
+  res.send({});
 });
 
-app.listen(port);
-console.log(`Server is listening on port ${port}`);
+// Start server
+app.listen(port, () => {
+  console.log(`Listening on port ${port}`);
+});
